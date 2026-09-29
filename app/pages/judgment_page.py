@@ -13,7 +13,8 @@ from core.models import DECISIONS
 from ..widgets import AppState, AttrsEditor, guarded, ro_item, run_in_thread
 
 DECISION_COLORS = {"必要": "#e6f4ea", "要検討": "#fff3cd", "不要": "#f1f1f1"}
-COLS = ["出力", "WBS番号", "作業項目", "作業項目（英語）", "判定", "採用率", "加重", "ルール", "採用した事例", "採用しなかった事例"]
+COLS = ["出力", "WBS番号", "大分類", "中分類", "作業項目", "作業項目（英語）", "判定", "採用率", "加重", "ルール", "採用した事例", "採用しなかった事例"]
+DECISION_COL = COLS.index("判定")
 
 
 class JudgmentPage(QWidget):
@@ -42,7 +43,7 @@ class JudgmentPage(QWidget):
         self.table.setHorizontalHeaderLabels(COLS)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(COLS.index("作業項目"), QHeaderView.Stretch)
         self.table.itemChanged.connect(self._item_changed)
         self.table.itemSelectionChanged.connect(self.update_texts)
         self.summary = QLabel("")
@@ -135,6 +136,11 @@ class JudgmentPage(QWidget):
         js = self.state.judgments
         self._filling = True
         self.table.setRowCount(0)
+        has_cats = any(j.cat1 or j.cat2 for j in js)
+        for c in (COLS.index("大分類"), COLS.index("中分類")):
+            self.table.setColumnHidden(c, not has_cats)      # 大分類・中分類のない WBS では隠す
+        for c in (COLS.index("WBS番号"),):
+            self.table.setColumnHidden(c, bool(js) and not any(j.wbs_no for j in js))
         for j in js:
             i = self.table.rowCount()
             self.table.insertRow(i)
@@ -147,12 +153,13 @@ class JudgmentPage(QWidget):
             rate = f"{texts.pct(j.rate)}%（{len(j.adopted_cases)}/{j.total}）" if j.total else "-"
             wrate = f"{texts.pct(j.wrate)}%" if j.wrate is not None else "-"
             rule = f"{j.rule_name}→{j.rule_decision}" if j.rule_name else ""
-            vals = [j.wbs_no, name, j.name_en, None, rate, wrate, rule, "、".join(j.adopted_cases), "、".join(j.not_adopted_cases)]
+            vals = [j.wbs_no, j.cat1, j.cat2, name, j.name_en, None, rate, wrate, rule, "、".join(j.adopted_cases),
+                    "、".join(j.not_adopted_cases)]
             for col, v in enumerate(vals, 1):
-                if col == 4:
+                if col == DECISION_COL:
                     continue
                 item = ro_item(v)
-                if col == 3 and j.untranslated:
+                if col == COLS.index("作業項目（英語）") and j.untranslated:
                     item.setForeground(QBrush(QColor("#b35c00")))
                 self.table.setItem(i, col, item)
             combo = QComboBox()
@@ -160,7 +167,7 @@ class JudgmentPage(QWidget):
             combo.setCurrentText(j.decision)
             combo.setStyleSheet(f"background:{DECISION_COLORS.get(j.decision, '#fff')}")
             combo.currentTextChanged.connect(lambda v, key=j.key, prev=j.decision: self.override(key, v, prev))
-            self.table.setCellWidget(i, 4, combo)
+            self.table.setCellWidget(i, DECISION_COL, combo)
             tip = j.reason_ja + "\n" + j.reason_en
             for col in range(len(COLS)):
                 if self.table.item(i, col):

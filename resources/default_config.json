@@ -1,4 +1,13 @@
 {
+  "wbs_types": ["設計", "構築", "テスト"],
+  "header_keywords": {
+    "_説明": "列見出し → 列の意味。ひな形の「大分類・中分類・作業項目」と、実用WBSの「管理単位（中２）・（中３）・（小）」を同じ意味にすることで、読み取り・照合・転記がそろう",
+    "cat1": ["大分類", "管理単位（中２）", "管理単位（中2）"],
+    "cat2": ["中分類", "管理単位（中３）", "管理単位（中3）"],
+    "name": ["作業項目", "管理単位（小）"],
+    "unit_l": ["管理単位（大）"],
+    "unit_m1": ["管理単位（中１）", "管理単位（中1）"]
+  },
   "thresholds": {
     "required": 0.7,
     "unneeded": 0.3
@@ -37,6 +46,7 @@
   },
   "output": {
     "include_parents": true,
+    "repeat_categories": true,
     "clear_sample_rows": true,
     "engine": "auto"
   },

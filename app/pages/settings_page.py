@@ -43,6 +43,9 @@ class SettingsPage(QWidget):
         c = self.state.cfg
         w = QWidget()
         form = QFormLayout(w)
+        self.wbs_types = QLineEdit("、".join(c.get("wbs_types") or []))
+        form.addRow("WBS の種類（、区切り）", self.wbs_types)
+        form.addRow("", QLabel("ひな形・実用WBS様式・過去事例・ルールは種類ごとに登録します。種類名を変えると、その種類のデータは見えなくなります。"))
         self.required = _pct_spin(c["thresholds"]["required"])
         self.unneeded = _pct_spin(c["thresholds"]["unneeded"])
         form.addRow("「必要」とする採用率（以上）", self.required)
@@ -79,8 +82,11 @@ class SettingsPage(QWidget):
         self.include_parents.setChecked(bool(c["output"].get("include_parents", True)))
         self.clear_sample = QCheckBox("テンプレートの明細に残っている値を消してから書き込む")
         self.clear_sample.setChecked(bool(c["output"].get("clear_sample_rows", True)))
+        self.repeat_categories = QCheckBox("大分類・中分類を毎行書く（オフにすると、上の行と同じときは空欄）")
+        self.repeat_categories.setChecked(bool(c["output"].get("repeat_categories", True)))
         form.addRow("", self.include_parents)
         form.addRow("", self.clear_sample)
+        form.addRow("", self.repeat_categories)
         save = QPushButton("設定を保存")
         save.setStyleSheet("font-weight:bold")
         save.clicked.connect(lambda: self.save_general())
@@ -105,7 +111,12 @@ class SettingsPage(QWidget):
         c["attributes"]["update_types"] = split(self.update_types.text())
         c["attributes"]["systems"] = split(self.systems.text())
         c["output"].update(engine=self.engine.currentData(), include_parents=self.include_parents.isChecked(),
-                           clear_sample_rows=self.clear_sample.isChecked())
+                           clear_sample_rows=self.clear_sample.isChecked(),
+                           repeat_categories=self.repeat_categories.isChecked())
+        types = split(self.wbs_types.text())
+        if not types:
+            raise ValueError("WBS の種類を 1 つ以上入力してください。")
+        c["wbs_types"] = types
         self.state.save_config()
         QMessageBox.information(self, "設定", "設定を保存しました。選択肢の変更は再起動後の入力欄に反映されます。")
 

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPlainTextEdit, QPushButton,
+from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QPlainTextEdit, QPushButton,
                                QSplitter, QTableWidget, QTabWidget, QVBoxLayout, QWidget)
 
 from core import paths, workflow
@@ -15,7 +15,9 @@ from excel_io import com_writer, engine as engine_mod, plan as plan_mod
 
 from ..widgets import AppState, SheetGrid, guarded, ro_item, run_in_thread
 
-SOURCE_ITEMS = [("", "（書き込まない）"), ("__seq__", "連番（1, 2, 3 …）")] + list(MEANINGS.items())
+CONST = "__const__"   # 選択肢「固定値…」（選ぶと入力欄を出す）
+SOURCE_ITEMS = ([("", "（書き込まない）"), ("__seq__", "連番（1, 2, 3 …）"), (plan_mod.TYPE_SOURCE, "WBSの種類（設計・構築・テスト）"),
+                 (CONST, "固定値…")] + list(MEANINGS.items()))
 STATUS_LABELS = {"write": "書き込む", "clear": "値を消す", "skip": "書き込まない"}
 
 
@@ -52,11 +54,20 @@ class ExportPage(QWidget):
         self.mapping.verticalHeader().setVisible(False)
         save_map = QPushButton("列の対応を様式プロファイルに保存")
         save_map.clicked.connect(lambda: self.save_sources())
+        # 管理単位（大）・（中１）：ひな形に対応する列がないので、候補から選んだ値（または入力した値）を全行に書く
+        self.unit_box = QGroupBox("管理単位（大）・（中１）に書く値（全行に同じ値を書きます）")
+        self.unit_form = QFormLayout(self.unit_box)
+        self.unit_hint = QLabel("候補は、この WBS の種類の過去事例で使われた値（多い順）・入力規則の許可値・WBS の種類名です。直接入力もできます。")
+        self.unit_hint.setWordWrap(True)
+        self.unit_hint.setStyleSheet("color:#666")
+        self.unit_form.addRow(self.unit_hint)
+        self.unit_combos: dict[str, QComboBox] = {}
         map_box = QWidget()
         mb = QVBoxLayout(map_box)
         mb.setContentsMargins(0, 0, 0, 0)
         mb.addWidget(QLabel("テンプレートの各列に、ひな形のどの値を書くか（判断できない列は選んでください）"))
         mb.addWidget(self.mapping, 1)
+        mb.addWidget(self.unit_box)
         mb.addWidget(save_map)
 
         self.diff = QTableWidget(0, 5)
@@ -122,6 +133,7 @@ class ExportPage(QWidget):
         layout.addWidget(split, 1)
         state.formatsChanged.connect(self.refresh)
         state.settingsChanged.connect(self.refresh)
+        state.casesChanged.connect(self.refresh)   # 管理単位の候補・初期値は過去事例から作る
         self.refresh()
 
     # ---- 表示 ----
@@ -137,8 +149,20 @@ class ExportPage(QWidget):
             self.plan_label.setText("先に「様式登録」で実用WBS様式（出力テンプレート）を登録してください。")
             return
         prof = out["profile"]
+        self._prof = prof
         meanings = set((master or {}).get("profile", {}).get("columns", {}).values())
-        self.sources = dict(prof.get("sources") or plan_mod.default_sources(prof, meanings, out["analysis"]))
+        self.sources = dict(prof.get("sources") or workflow.default_sources(self.state.db, prof, meanings, out["analysis"]))
+        self._fill_mapping()
+        self._fill_units()
+        try:
+            self.grid.load(out["file"], prof["sheet"])
+            self.grid.highlight(prof)
+        except Exception:
+            pass
+
+    def _fill_mapping(self):
+        prof = self._prof
+        self.mapping.setRowCount(0)
         for col in sorted(prof.get("columns", {}), key=lambda c: (len(c), c)):
             i = self.mapping.rowCount()
             self.mapping.insertRow(i)
@@ -147,16 +171,68 @@ class ExportPage(QWidget):
             combo = QComboBox()
             for k, label in SOURCE_ITEMS:
                 combo.addItem(label, k)
-            combo.setCurrentIndex(max(0, combo.findData(self.sources.get(col) or "")))
-            if not self.sources.get(col):
+            src = self.sources.get(col) or ""
+            if src.startswith(plan_mod.CONST_PREFIX):
+                combo.insertItem(4, f"固定値「{src[len(plan_mod.CONST_PREFIX):]}」", src)
+            combo.setCurrentIndex(max(0, combo.findData(src)))
+            if not src:
                 combo.setStyleSheet("background:#fff3cd")
-            combo.currentIndexChanged.connect(lambda _i, c=col, w=combo: self.sources.__setitem__(c, w.currentData() or None))
+            combo.activated.connect(lambda _i, c=col, w=combo: self._source_chosen(c, w))
             self.mapping.setCellWidget(i, 2, combo)
-        try:
-            self.grid.load(out["file"], prof["sheet"])
-            self.grid.highlight(prof)
-        except Exception:
-            pass
+
+    NOT_WRITE = "（書き込まない）"
+
+    def _fill_units(self):
+        """管理単位（大）・（中１）の列ごとに、値を選ぶ欄を作る。"""
+        while self.unit_form.rowCount() > 1:
+            self.unit_form.removeRow(1)
+        self.unit_combos.clear()
+        prof = self._prof
+        cols = [(c, m) for c, m in prof.get("columns", {}).items() if m in workflow.UNIT_MEANINGS]
+        self.unit_box.setVisible(bool(cols))
+        for col, meaning in sorted(cols, key=lambda cm: (len(cm[0]), cm[0])):
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.addItem(self.NOT_WRITE)
+            for value, n in workflow.unit_candidates(self.state.db, meaning):
+                combo.addItem(value)
+                combo.setItemData(combo.count() - 1, f"過去事例で {n}件" if n else "入力規則の許可値・WBSの種類", Qt.ToolTipRole)
+            src = self.sources.get(col) or ""
+            combo.setCurrentText(src[len(plan_mod.CONST_PREFIX):] if src.startswith(plan_mod.CONST_PREFIX) else self.NOT_WRITE)
+            combo.currentTextChanged.connect(lambda text, c=col: self._unit_chosen(c, text))
+            self.unit_combos[col] = combo
+            header = prof.get("headers", {}).get(col, MEANINGS.get(meaning, ""))
+            self.unit_form.addRow(f"{col}列「{header}」", combo)
+
+    def _unit_chosen(self, col: str, text: str):
+        text = (text or "").strip()
+        self.sources[col] = None if text in ("", self.NOT_WRITE) else plan_mod.CONST_PREFIX + text
+        self._fill_mapping()
+
+    def select_unit(self, col: str, text: str):
+        """管理単位の値を選ぶ（自己診断用）。"""
+        self.unit_combos[col].setCurrentText(text)
+
+    def _source_chosen(self, col: str, combo: QComboBox):
+        """書き込む値を選んだとき。「固定値…」なら文字を入力してもらう。"""
+        data = combo.currentData()
+        if data == CONST:
+            current = self.sources.get(col) or ""
+            default = current[len(plan_mod.CONST_PREFIX):] if current.startswith(plan_mod.CONST_PREFIX) else ""
+            text, ok = QInputDialog.getText(self, "固定値", f"{col}列に毎行書く値を入力してください。", text=default)
+            if ok and text.strip():
+                value = plan_mod.CONST_PREFIX + text.strip()
+                self.sources[col] = value
+                idx = combo.findData(value)
+                if idx < 0:
+                    combo.insertItem(4, f"固定値「{text.strip()}」", value)
+                    idx = 4
+                combo.setCurrentIndex(idx)
+            else:
+                combo.setCurrentIndex(max(0, combo.findData(self.sources.get(col) or "")))
+            return
+        self.sources[col] = data or None
+        combo.setStyleSheet("" if data else "background:#fff3cd")
 
     @guarded("保存できませんでした")
     def save_sources(self):

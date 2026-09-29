@@ -21,6 +21,10 @@ from core.models import MEANINGS
 from . import inspect, reader
 
 
+CONST_PREFIX = "__const__:"   # 列に固定値を書く書き込み元
+TYPE_SOURCE = "__type__"       # 列に WBS の種類（設計・構築・テスト）を書く書き込み元
+
+
 @dataclass
 class CellWrite:
     ref: str
@@ -148,7 +152,12 @@ def build_plan(analysis: dict, profile: dict, rows: list[dict], sources: dict[st
             if not src:
                 continue
             meaning = profile["columns"].get(col, "")
-            value = i + 1 if src == "__seq__" else values.get(src)
+            if src == "__seq__":
+                value = i + 1
+            elif src.startswith(CONST_PREFIX):
+                value = src[len(CONST_PREFIX):]          # 固定値（例：管理単位（大）に案件名）
+            else:
+                value = values.get(src)                   # __type__ なら WBS の種類
             if value in (None, ""):
                 continue
             ref = f"{col}{r}"
@@ -213,7 +222,12 @@ def build_plan(analysis: dict, profile: dict, rows: list[dict], sources: dict[st
 def describe_sources(sources: dict[str, str | None], headers: dict[str, str]) -> list[str]:
     out = []
     for col, src in sources.items():
-        label = "連番" if src == "__seq__" else (MEANINGS.get(src, src) if src else "（書き込まない）")
+        if src and src.startswith(CONST_PREFIX):
+            label = f"固定値「{src[len(CONST_PREFIX):]}」"
+        elif src == TYPE_SOURCE:
+            label = "WBSの種類"
+        else:
+            label = "連番" if src == "__seq__" else (MEANINGS.get(src, src) if src else "（書き込まない）")
         out.append(f"{col}列「{headers.get(col, '')}」← {label}")
     return out
 

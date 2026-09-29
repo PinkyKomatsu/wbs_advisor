@@ -100,6 +100,7 @@ class RulesPage(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(split)
         state.formatsChanged.connect(self._load_items)
+        state.typeChanged.connect(self.refresh)          # ルールは WBS の種類ごと
         self._load_items()
         self.refresh()
 

@@ -81,6 +81,13 @@ def build_texts(judgments: list[Judgment], glossary: dict[str, str], templates: 
     all_untranslated: dict[str, int] = {}
     for j in judgments:
         j.name_en, un = tr.translate(j.name)
+        j.cat1 = str((j.values or {}).get("cat1") or "")
+        j.cat2 = str((j.values or {}).get("cat2") or "")
+        for attr in ("cat1", "cat2"):
+            ja_text = getattr(j, attr)
+            en_text, u = tr.translate(ja_text) if ja_text else ("", [])
+            setattr(j, attr + "_en", en_text)
+            un = un + [x for x in u if x not in un]
         ja, en = [], []
         if j.is_extra:
             ja.append(templates["extra"]["ja"])
@@ -123,22 +130,41 @@ HEAD_JA = ["WBS番号", "作業項目", "判定", "採用率", "判定理由"]
 HEAD_EN = ["WBS No.", "Work item", "Decision", "Adoption rate", "Reason"]
 
 
+CAT_HEAD_JA = ["大分類", "中分類"]
+CAT_HEAD_EN = ["Category", "Subcategory"]
+
+
 def copy_text(judgments: list[Judgment], lang: str, fmt: str, templates: dict, header: bool = True) -> str:
-    """lang: "ja" / "en"、fmt: "tsv"（タブ区切り） / "text"（改行区切り）。"""
+    """lang: "ja" / "en"、fmt: "tsv"（タブ区切り） / "text"（改行区切り）。
+    大分類・中分類がある WBS では、その列も入れる。"""
     dec_en = templates.get("decisions", {})
+    with_cats = any(j.cat1 or j.cat2 for j in judgments)
     rows = []
     for j in judgments:
         rate = f"{pct(j.rate)}%" if j.total else "-"
         if lang == "en":
-            rows.append([j.wbs_no, j.name_en or j.name, dec_en.get(j.decision, j.decision), rate, j.reason_en])
+            cats = [j.cat1_en or j.cat1, j.cat2_en or j.cat2]
+            row = [j.wbs_no, j.name_en or j.name, dec_en.get(j.decision, j.decision), rate, j.reason_en]
         else:
-            rows.append([j.wbs_no, j.name, j.decision, rate, j.reason_ja])
+            cats = [j.cat1, j.cat2]
+            row = [j.wbs_no, j.name, j.decision, rate, j.reason_ja]
+        rows.append((cats, row))
     if fmt == "tsv":
-        lines = (["\t".join(HEAD_EN if lang == "en" else HEAD_JA)] if header else [])
-        lines += ["\t".join(str(c).replace("\t", " ").replace("\n", " ") for c in r) for r in rows]
+        with_no = any(j.wbs_no for j in judgments) or not judgments   # WBS 番号のない WBS では列ごと省く
+        head = HEAD_EN if lang == "en" else HEAD_JA
+        head = ([head[0]] + (CAT_HEAD_EN if lang == "en" else CAT_HEAD_JA) + head[1:]) if with_cats else list(head)
+        if not with_no:
+            head = head[1:]
+        lines = ["\t".join(head)] if header else []
+        for cats, r in rows:
+            cells = [r[0]] + cats + r[1:] if with_cats else r
+            if not with_no:
+                cells = cells[1:]
+            lines.append("\t".join(str(c).replace("\t", " ").replace("\n", " ") for c in cells))
         return "\n".join(lines)
     out = []
-    for no, name, dec, rate, reason in rows:
-        head = f"{no} {name}".strip()
+    for cats, (no, name, dec, rate, reason) in rows:
+        path = " > ".join(c for c in cats if c) if with_cats else ""
+        head = " ".join(x for x in (no, f"{path} > {name}" if path else name) if x)
         out.append(f"{head}: {dec} ({rate}) {reason}" if lang == "en" else f"{head}：{dec}（{rate}）{reason}")
     return "\n".join(out)

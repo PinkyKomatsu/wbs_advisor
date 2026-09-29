@@ -10,6 +10,10 @@ MEANINGS = {
     "no": "No（連番）",
     "wbs_no": "WBS番号",
     "phase": "工程/フェーズ",
+    "unit_l": "管理単位（大）",
+    "unit_m1": "管理単位（中１）",
+    "cat1": "大分類",
+    "cat2": "中分類",
     "name": "作業項目名",
     "owner": "担当",
     "effort": "予定工数",
@@ -111,6 +115,10 @@ class Judgment:
     values: dict = field(default_factory=dict)
     prev_key: str | None = None
     name_en: str = ""
+    cat1: str = ""          # 大分類
+    cat2: str = ""          # 中分類
+    cat1_en: str = ""
+    cat2_en: str = ""
     reason_ja: str = ""
     reason_en: str = ""
     untranslated: list = field(default_factory=list)

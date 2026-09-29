@@ -334,6 +334,75 @@ def build_template(path: Path, protected_path: Path):
         pythoncom.CoUninitialize()
 
 
+# ---------------------------------------------------------------------------
+# 「大分類・中分類・作業項目」のひな形と、「管理単位（大）〜（小）」の実用WBS（Excel 不要）
+# ---------------------------------------------------------------------------
+
+UNIT_MASTER = [   # (大分類, 中分類, 作業項目, 担当)
+    ("基本設計", "画面設計", "画面一覧の作成", "ベンダー"),
+    ("基本設計", "画面設計", "画面レイアウトの作成", "ベンダー"),
+    ("基本設計", "帳票設計", "帳票一覧の作成", "ベンダー"),
+    ("基本設計", "帳票設計", "帳票レイアウトの作成", "医事課"),
+    ("詳細設計", "連携設計", "電子カルテ連携仕様の作成", "ベンダー"),
+    ("詳細設計", "連携設計", "PACS連携仕様の作成", "ベンダー"),
+    ("詳細設計", "マスタ設計", "点数マスタ移行設計", "ベンダー"),
+]
+UNIT_HEADERS = ["管理単位（大）", "管理単位（中１）", "管理単位（中２）", "管理単位（中３）", "管理単位（小）", "担当", "備考"]
+UNIT_CASES = {
+    "units_A": {"skip": [], "rename": {}},
+    "units_B": {"skip": ["PACS連携仕様の作成"], "rename": {"画面一覧の作成": "画面一覧作成"}},
+}
+
+
+def _grouped(rows):
+    """分類はグループの先頭行にだけ書く（実際の WBS によくある書き方）。"""
+    prev1 = prev2 = None
+    for c1, c2, *rest in rows:
+        yield (c1 if c1 != prev1 else None, c2 if (c1, c2) != (prev1, prev2) else None, *rest)
+        prev1, prev2 = c1, c2
+
+
+def build_unit_fixtures(here: Path = HERE) -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "WBSひな形"
+    ws["A1"] = "設計WBS ひな形"
+    for i, h in enumerate(["大分類", "中分類", "作業項目", "担当", "備考"], 1):
+        c = ws.cell(2, i, h)
+        c.font, c.fill, c.border = Font(bold=True), HEAD_FILL, BOX
+    for r, row in enumerate(_grouped(UNIT_MASTER), 3):
+        for i, v in enumerate(row, 1):
+            ws.cell(r, i, v).border = BOX
+    wb.save(here / "master_units.xlsx")
+
+    def practical(path: Path, rows, n_blank: int = 0, title: str = ""):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "WBS"
+        ws["A1"] = title or "医事会計システム更新 設計WBS"
+        for i, h in enumerate(UNIT_HEADERS, 1):
+            c = ws.cell(3, i, h)
+            c.font, c.fill, c.border = Font(bold=True), HEAD_FILL, BOX
+        r = 4
+        for c1, c2, name, owner in _grouped(rows):
+            for i, v in enumerate(["医事会計更新", "設計", c1, c2, name, owner, None], 1):
+                ws.cell(r, i, v).border = BOX
+            r += 1
+        for _ in range(n_blank):
+            for i in range(1, len(UNIT_HEADERS) + 1):
+                ws.cell(r, i).border = BOX
+            r += 1
+        for col, w in zip("ABCDEFG", (14, 12, 14, 14, 26, 12, 16)):
+            ws.column_dimensions[col].width = w
+        wb.save(path)
+
+    for name, spec in UNIT_CASES.items():
+        rows = [(c1, c2, spec["rename"].get(n, n), o) for c1, c2, n, o in UNIT_MASTER if n not in spec["skip"]]
+        practical(here / f"{name}.xlsx", rows)
+    # 出力テンプレート：見出しと、罫線付きの空き行 15 行
+    practical(here / "template_units.xlsx", [], n_blank=15, title="医事会計システム更新 WBS（管理単位）")
+
+
 def scrub_metadata(path: Path) -> None:
     """ファイルのプロパティから作成者・最終更新者（Office のユーザー名）を消す。VBA など他のパーツは変えない。"""
     import re as _re
@@ -358,6 +427,11 @@ def main() -> int:
     for name, spec, title in (("case_A", CASE_A, "A病院 医事会計更新"), ("case_B", CASE_B, "B病院 医事会計更新"),
                               ("case_C", CASE_C, "C病院 医事会計更新")):
         build_case(HERE / f"{name}.xlsx", spec, title)
+    build_unit_fixtures()
+    if "--no-excel" in sys.argv:          # Excel を使わない素材だけ作る
+        for p in sorted(HERE.glob("*units*.xlsx")):
+            scrub_metadata(p)
+        return 0
     version = excel_version()
     print("Excel", version)
     with TrustVBOM(version):

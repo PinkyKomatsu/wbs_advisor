@@ -33,6 +33,50 @@ def _c14n(el) -> bytes:
     return etree.tostring(el, method="c14n")
 
 
+def _rgb(color) -> str | None:
+    rgb = getattr(color, "rgb", None) if color is not None else None
+    return rgb[-6:].upper() if isinstance(rgb, str) and len(rgb) >= 6 else None   # 透明度（先頭 2 桁）は無視
+
+
+def same_style(a, b) -> bool:
+    """実際に効いている書式が同じか（Excel が保存し直したときの表し方の違いは同じとみなす）。
+    - テーマのフォント（scheme 指定）や未指定のフォント名・サイズは、比べない（表示は同じフォント）
+    - 色は透明度を除いた RGB で比べる"""
+    fa, fb = a.font, b.font
+    if fa.name is not None and not fa.scheme and fa.name != fb.name:
+        return False
+    if fa.sz is not None and fa.sz != fb.sz:
+        return False
+    if bool(fa.b) != bool(fb.b) or bool(fa.i) != bool(fb.i):
+        return False
+    ca, cb = _rgb(fa.color), _rgb(fb.color)
+    if ca and cb and ca != cb:
+        return False
+    for s in ("left", "right", "top", "bottom"):
+        if getattr(getattr(a.border, s), "style", None) != getattr(getattr(b.border, s), "style", None):
+            return False
+    if (a.fill.fill_type or None) != (b.fill.fill_type or None):
+        return False
+    if a.fill.fill_type == "solid" and _rgb(a.fill.fgColor) != _rgb(b.fill.fgColor):
+        return False
+    if a.number_format != b.number_format:
+        return False
+    return (a.alignment.horizontal or None) == (b.alignment.horizontal or None) and \
+        bool(a.alignment.wrap_text) == bool(b.alignment.wrap_text)
+
+
+def col_widths(path, sheet: str) -> dict[str, float]:
+    """列ごとの幅（Excel が同じ幅の列を「C〜D」とまとめて保存した場合も列ごとに展開する）。"""
+    from openpyxl.utils import get_column_letter
+    ws = reader.load(path, data_only=False)[sheet]
+    out = {}
+    for dim in ws.column_dimensions.values():
+        if dim.width and dim.min and dim.max:
+            for c in range(dim.min, dim.max + 1):
+                out[get_column_letter(c)] = round(float(dim.width), 2)
+    return out
+
+
 def _style_sig(cell) -> tuple:
     f, b, fill = cell.font, cell.border, cell.fill
     return (f.name, f.sz, f.b, f.i, f.color.rgb if f.color is not None else None,
@@ -114,10 +158,14 @@ def verify(template, out, plan, analysis: dict) -> list[Check]:
                         + ("。挿入行の範囲に同じルールを適用" if after["cond_formats"] > analysis["cond_formats"] else "") + "）"))
     checks.append(Check("シート保護", after["protected"] == analysis["protected"], "あり" if after["protected"] else "なし"))
     pa_, pb_ = analysis["print"], after["print"]
-    print_ok = pa_["titles"] == pb_["titles"] and pa_["orientation"] == pb_["orientation"] and \
-        (pa_["area"] == pb_["area"] or n > 0)
-    checks.append(Check("印刷設定", print_ok, f"印刷範囲 {pa_['area']} → {pb_['area']}"))
-    checks.append(Check("列幅", after["col_widths"] == analysis["col_widths"], "一致" if after["col_widths"] == analysis["col_widths"] else "差異あり"))
+    orient = lambda o: o or "portrait"            # 未指定は既定の「縦」
+    print_ok = (pa_["titles"] or None) == (pb_["titles"] or None) and orient(pa_["orientation"]) == orient(pb_["orientation"]) \
+        and ((pa_["area"] or None) == (pb_["area"] or None) or n > 0)
+    checks.append(Check("印刷設定", print_ok, f"印刷範囲 {pa_['area'] or 'なし'} → {pb_['area'] or 'なし'}、"
+                                            f"向き {orient(pa_['orientation'])} → {orient(pb_['orientation'])}"))
+    wa_, wb2 = col_widths(template, plan.sheet), col_widths(out, plan.sheet)
+    diff_w = [c for c in wa_ if wa_[c] != wb2.get(c)]
+    checks.append(Check("列幅", not diff_w, "一致" if not diff_w else "差異：" + "、".join(diff_w)))
     if not n:
         checks.append(Check("行高", after["row_heights"] == analysis["row_heights"], "一致" if after["row_heights"] == analysis["row_heights"] else "差異あり"))
 
@@ -131,7 +179,7 @@ def verify(template, out, plan, analysis: dict) -> list[Check]:
             if c.coordinate in targets:
                 continue
             ref = _shift_ref(c.coordinate, at, n)
-            if _style_sig(c) != _style_sig(ws_b[ref]):
+            if not same_style(c, ws_b[ref]):
                 diffs.append(c.coordinate)
     checks.append(Check("書式（フォント・罫線・塗り・表示形式）", not diffs,
                         "変化なし" if not diffs else "変化：" + "、".join(diffs[:10])))

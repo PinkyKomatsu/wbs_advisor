@@ -83,7 +83,41 @@ def selftest(win, app, out: Path, fixtures: Path) -> dict:
         shot("6_verify.png")
         win.tabs.setCurrentWidget(win.settings_page)
         shot("7_settings.png")
-        result["ok"] = bool(path) and all(ok == "OK" for _, ok in checks)
+        ok_design = bool(path) and all(ok == "OK" for _, ok in checks)
+
+        # WBS の種類を切り替え、「大分類・中分類・作業項目」→「管理単位（中２）・（中３）・（小）」で出力する
+        win.type_box.setCurrentText("テスト")
+        result["steps"]["テスト_empty"] = (st.db.active_format("master") is None and not st.db.cases()
+                                           and win.judgment_page.table.rowCount() == 0)
+        win.format_page.master.register(fixtures / "master_units.xlsx")
+        win.format_page.output.register(fixtures / "template_units.xlsx")
+        win.cases_page.import_files([fixtures / "units_A.xlsx", fixtures / "units_B.xlsx"], sync=True)
+        win.judgment_page.run(sync=True)
+        win.tabs.setCurrentWidget(win.judgment_page)
+        shot("8_units_judgment.png")
+        # 管理単位（大）は過去事例の最多値が初期値。（中１）は手で選び直す
+        result["steps"]["テスト_unit_default"] = win.export_page.unit_combos["A"].currentText()
+        win.export_page.select_unit("B", "詳細設計")
+        plan2 = win.export_page.make_plan()
+        path2 = win.export_page.export(confirm=False, out_dir=out / "テスト", sync=True)
+        from excel_io import reader as _reader
+        ws = _reader.load(path2)["WBS"]
+        result["steps"]["テスト_output"] = [[ws[f"{c}{r}"].value for c in "ABCDE"] for r in (4, 9)]
+        rs = win.export_page.result
+        result["steps"]["テスト_checks"] = [(rs.item(i, 0).text(), rs.item(i, 1).text(), rs.item(i, 2).text())
+                                           for i in range(rs.rowCount())]
+        checks2 = [c[1] for c in result["steps"]["テスト_checks"]]
+        win.tabs.setCurrentWidget(win.export_page)
+        shot("9_units_export.png")
+        win.type_box.setCurrentText("設計")
+        result["steps"]["設計_cases_after_switch_back"] = len(st.db.cases())
+        result["ok"] = (ok_design and result["steps"]["テスト_empty"] and all(c == "OK" for c in checks2)
+                        # PACS連携仕様の作成は採用率 50%（要検討）で初期状態は出力しないため、9 行目は次の項目
+                        and result["steps"]["テスト_unit_default"] == "医事会計更新"
+                        and result["steps"]["テスト_output"] == [
+                            ["医事会計更新", "詳細設計", "基本設計", "画面設計", "画面一覧の作成"],
+                            ["医事会計更新", "詳細設計", "詳細設計", "マスタ設計", "点数マスタ移行設計"]]
+                        and result["steps"]["設計_cases_after_switch_back"] == 3)
     except Exception as e:
         result["error"] = f"{e}\n{traceback.format_exc()}"
     (out / "selftest.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")

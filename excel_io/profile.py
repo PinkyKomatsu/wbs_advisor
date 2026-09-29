@@ -35,12 +35,21 @@ REQUIRED = ("name",)
 _TOTAL_WORDS = ("合計", "小計", "総計", "total")
 
 
-def _match(text: str) -> tuple[str | None, float]:
+def keywords(cfg: dict | None) -> dict[str, list[str]]:
+    """設定の header_keywords（例：管理単位（中２）→ 大分類）を、組み込みのキーワードより優先して使う。"""
+    extra = {m: [norm(w) for w in ws] for m, ws in (cfg or {}).get("header_keywords", {}).items()
+             if isinstance(ws, list)}
+    out = {m: extra.get(m, []) + [w for w in KEYWORDS.get(m, []) if w not in extra.get(m, [])]
+           for m in list(extra) + [m for m in KEYWORDS if m not in extra]}
+    return out
+
+
+def _match(text: str, kw: dict[str, list[str]] | None = None) -> tuple[str | None, float]:
     t = norm(text)
     if not t or len(t) > 20:
         return None, 0.0
     best, best_s = None, 0.0
-    for meaning, words in KEYWORDS.items():
+    for meaning, words in (kw or KEYWORDS).items():
         for rank, w in enumerate(words):
             s = 1.0 if t == w else (0.8 if w in t and len(w) >= 2 else 0.0)
             s -= rank * 0.01
@@ -49,7 +58,7 @@ def _match(text: str) -> tuple[str | None, float]:
     return best, best_s
 
 
-def _header_candidates(ws, scan_rows: int):
+def _header_candidates(ws, scan_rows: int, kw=None):
     cands = []
     for r in range(1, min(ws.max_row, scan_rows) + 1):
         found: dict[str, tuple[str, float, str]] = {}
@@ -58,7 +67,7 @@ def _header_candidates(ws, scan_rows: int):
             v = ws.cell(r, c).value
             if not isinstance(v, str):
                 continue
-            meaning, s = _match(v)
+            meaning, s = _match(v, kw)
             if not meaning:
                 continue
             col = get_column_letter(c)
@@ -87,11 +96,12 @@ def detect(path, kind: str, cfg: dict | None = None) -> dict:
     cfg = cfg or {}
     pcfg = cfg.get("profile", {})
     scan = int(pcfg.get("header_scan_rows", 30))
+    kw = keywords(cfg)
     wb = reader.load(path, data_only=False)
     best = None
     ranking = []
     for ws in wb.worksheets:
-        for cand in _header_candidates(ws, scan)[:3]:
+        for cand in _header_candidates(ws, scan, kw)[:3]:
             ranking.append((cand["score"], ws.title, cand))
     ranking.sort(key=lambda x: -x[0])
     issues = []

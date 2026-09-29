@@ -26,8 +26,8 @@ class DuplicateCase(Exception):
 # 様式の登録
 # ---------------------------------------------------------------------------
 
-def _copy_in(path: Path, kind: str) -> Path:
-    dest_dir = paths.formats_dir() / kind
+def _copy_in(path: Path, kind: str, wbs_type: str = "") -> Path:
+    dest_dir = paths.formats_dir() / (wbs_type or "_") / kind
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / path.name
     if dest.resolve() != path.resolve():
@@ -35,21 +35,50 @@ def _copy_in(path: Path, kind: str) -> Path:
     return dest
 
 
+CATEGORY_KEYS = ("cat1", "cat2")   # 大分類・中分類
+
+
+def fill_categories(rows: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
+    """大分類・中分類が空欄の行は、上の行の値を引き継ぐ（大分類が変わったら中分類はリセット）。"""
+    cur = {"cat1": "", "cat2": ""}
+    out = []
+    for r, v in rows:
+        v = dict(v)
+        c1, c2 = reader.cell_text(v.get("cat1")), reader.cell_text(v.get("cat2"))
+        if "cat1" in v or "cat2" in v:
+            if c1 and c1 != cur["cat1"]:
+                cur = {"cat1": c1, "cat2": ""}
+            if c2:
+                cur["cat2"] = c2
+            v["cat1"], v["cat2"] = cur["cat1"], cur["cat2"]
+        out.append((r, v))
+    return out
+
+
+def context_of(values: dict, phase: str = "") -> str:
+    """照合と識別子に使う分類（大分類／中分類。なければ工程）。"""
+    c1, c2 = reader.cell_text(values.get("cat1")), reader.cell_text(values.get("cat2"))
+    if c1 or c2:
+        return f"{c1}／{c2}" if c2 else c1
+    return phase
+
+
 def build_master_items(rows: list[tuple[int, dict]]) -> list[MasterItem]:
-    """ひな形の明細からひな形項目を作る（階層は WBS 番号から。親は直前の浅い階層の項目）。"""
+    """ひな形の明細からひな形項目を作る。
+    WBS 番号があれば階層は番号から（親は直前の浅い階層の項目）。大分類・中分類の列があれば、作業項目のある行を項目にする。"""
     items: list[MasterItem] = []
     keys: set[str] = set()
     current_phase = ""
-    for seq, (r, v) in enumerate(rows):
+    for seq, (r, v) in enumerate(fill_categories(rows)):
         name = reader.cell_text(v.get("name"))
         if not name:
             continue
         wbs = reader.cell_text(v.get("wbs_no"))
         level = wbs_level(wbs) if wbs else (items[-1].level if items else 1)
         phase = reader.cell_text(v.get("phase"))
-        if level == 1 and not phase:
+        if level == 1 and not phase and not v.get("cat1"):
             current_phase = name
-        phase = phase or current_phase
+        phase = context_of(v, phase or current_phase)
         key = item_key(phase, name)
         if key in keys:
             key = f"{key}#{wbs or seq}"
@@ -63,15 +92,13 @@ def build_master_items(rows: list[tuple[int, dict]]) -> list[MasterItem]:
 
 def register_master(db: Database, path, cfg: dict, profile: dict | None = None) -> dict:
     p = reader.check(path)
-    stored = _copy_in(p, "master")
+    stored = _copy_in(p, "master", db.wbs_type)
     prof = profile or profile_mod.detect(stored, "master", cfg)
     fid = db.add_format("master", p.stem, stored, p, reader.sha256(p), prof, {})
     items = build_master_items(profile_mod.read_items(stored, prof, cfg.get("profile", {}).get("blank_rows_to_stop", 5)))
     db.replace_master_items(fid, items)
     # 用語辞書の初期値：ひな形の全項目（英語は空欄）
-    terms = {i.name: "" for i in items}
-    terms.update({i.phase: "" for i in items if i.phase})
-    db.upsert_terms(terms, source="ひな形")
+    db.upsert_terms(_terms(items), source="ひな形")
     log.info("ひな形を登録しました（%d項目）", len(items))
     return {"format_id": fid, "profile": prof, "items": len(items)}
 
@@ -81,13 +108,26 @@ def reload_master(db: Database, cfg: dict, profile: dict) -> int:
     db.update_format_profile(f["id"], profile)
     items = build_master_items(profile_mod.read_items(f["file"], profile))
     db.replace_master_items(f["id"], items)
-    db.upsert_terms({i.name: "" for i in items}, source="ひな形")
+    db.upsert_terms(_terms(items), source="ひな形")
     return len(items)
+
+
+def _terms(items) -> dict[str, str]:
+    """用語辞書の初期値：ひな形の全項目と分類（英語は空欄）。"""
+    terms = {i.name: "" for i in items}
+    for i in items:
+        for k in ("phase", "cat1", "cat2"):
+            v = reader.cell_text(i.values.get(k)) if k != "phase" else ""
+            if v:
+                terms[v] = ""
+        if not i.values.get("cat1") and i.phase:
+            terms[i.phase] = ""
+    return terms
 
 
 def register_output(db: Database, path, cfg: dict, profile: dict | None = None) -> dict:
     p = reader.check(path)
-    stored = _copy_in(p, "output")
+    stored = _copy_in(p, "output", db.wbs_type)
     prof = profile or profile_mod.detect(stored, "output", cfg)
     analysis = inspect.analyze(stored, prof["sheet"])
     fid = db.add_format("output", p.stem, stored, p, reader.sha256(p), prof, analysis)
@@ -136,13 +176,14 @@ def import_case(db: Database, path, cfg: dict, attrs: dict | None = None, name: 
         raise DuplicateCase(f"「{p.name}」は取込済みです（事例「{dup['name']}」と同じファイル）。")
     prof = case_profile(db, p, cfg)
     rows = []
-    for seq, (r, v) in enumerate(profile_mod.read_items(p, prof, cfg.get("profile", {}).get("blank_rows_to_stop", 5))):
+    read = profile_mod.read_items(p, prof, cfg.get("profile", {}).get("blank_rows_to_stop", 5))
+    for seq, (r, v) in enumerate(fill_categories(read)):
         nm = reader.cell_text(v.get("name"))
         if not nm:
             continue
         values = {k: (val.isoformat() if hasattr(val, "isoformat") else val) for k, val in v.items()}
         rows.append(CaseRow(id=None, case_id=None, seq=seq, row=r, wbs_no=reader.cell_text(v.get("wbs_no")),
-                            phase=reader.cell_text(v.get("phase")), name=nm, norm=norm(nm), values=values))
+                            phase=context_of(v, reader.cell_text(v.get("phase"))), name=nm, norm=norm(nm), values=values))
     cid = db.add_case(name or p.stem, p, h, attrs or {}, rows)
     rematch(db, cfg, case_id=cid)
     log.info("過去事例を取り込みました（%d行）", len(rows))
@@ -194,13 +235,66 @@ def run_judgment(db: Database, cfg: dict, templates: dict | None = None):
 # 出力
 # ---------------------------------------------------------------------------
 
-def output_rows(judgments, include_parents: bool = True) -> list[dict]:
+def output_rows(judgments, include_parents: bool = True, wbs_type: str = "", repeat_categories: bool = True) -> list[dict]:
+    """出力する行（列の意味 → 値）。大分類・中分類（cat1・cat2）はひな形の値をそのまま転記する。
+    repeat_categories=False なら、前の行と同じ大分類・中分類は空欄にする。"""
     rows = []
+    prev = {"cat1": None, "cat2": None}
     for j in output_order(judgments, include_parents):
         v = dict(j.values or {})
-        v.update({"wbs_no": "" if j.is_extra else j.wbs_no, "phase": j.phase, "name": j.name})
+        v.update({"wbs_no": "" if j.is_extra else j.wbs_no, "name": j.name, "__type__": wbs_type})
+        if not v.get("cat1") and not v.get("cat2"):
+            v["phase"] = v.get("phase") or j.phase   # 分類がなければ工程（照合用の「大分類／中分類」は書かない）
+        if not repeat_categories:
+            same1 = v.get("cat1") == prev["cat1"]
+            same2 = same1 and v.get("cat2") == prev["cat2"]
+            prev = {"cat1": v.get("cat1"), "cat2": v.get("cat2")}
+            if same1:
+                v["cat1"] = ""
+            if same2:
+                v["cat2"] = ""
         rows.append(v)
     return rows
+
+
+UNIT_MEANINGS = ("unit_l", "unit_m1")   # 管理単位（大）・（中１）：ひな形に対応する列がないので、値を選んで全行に書く
+
+
+def unit_candidates(db: Database, meaning: str) -> list[tuple[str, int]]:
+    """管理単位（大）・（中１）の候補 [(値, 過去事例で使われた件数)]。
+    多く使われた順 → テンプレートの入力規則の許可値 → WBS の種類名。"""
+    from collections import Counter
+    counts: Counter = Counter()
+    for r in db.case_rows():
+        v = reader.cell_text(r.values.get(meaning))
+        if v:
+            counts[v] += 1
+    out = [(v, n) for v, n in counts.most_common()]
+    seen = {v for v, _ in out}
+    fmt = db.active_format("output")
+    if fmt:
+        prof = fmt["profile"]
+        for col, m in prof.get("columns", {}).items():
+            if m == meaning and prof.get("data_start"):
+                v = inspect.validation_for(fmt["analysis"], f"{col}{prof['data_start']}")
+                for a in (v or {}).get("allowed") or []:
+                    if a and a not in seen:
+                        out.append((a, 0))
+                        seen.add(a)
+    if db.wbs_type not in seen:
+        out.append((db.wbs_type, 0))
+    return out
+
+
+def default_sources(db: Database, prof: dict, master_meanings: set, analysis: dict) -> dict:
+    """列の対応の既定値。管理単位（大）・（中１）は、過去事例で最も多く使われた値を初期値にする。"""
+    src = plan_mod.default_sources(prof, master_meanings, analysis)
+    for col, m in prof.get("columns", {}).items():
+        if m in UNIT_MEANINGS and not src.get(col):
+            cands = [v for v, n in unit_candidates(db, m) if n > 0]
+            if cands:
+                src[col] = plan_mod.CONST_PREFIX + cands[0]
+    return src
 
 
 def build_plan(db: Database, cfg: dict, judgments, sources: dict | None = None, engine: str | None = None):
@@ -210,9 +304,10 @@ def build_plan(db: Database, cfg: dict, judgments, sources: dict | None = None, 
         raise RuntimeError("実用WBS様式（出力テンプレート）が登録されていません。")
     prof, analysis = out["profile"], out["analysis"]
     master_meanings = set((master or {}).get("profile", {}).get("columns", {}).values())
-    sources = sources or prof.get("sources") or plan_mod.default_sources(prof, master_meanings, analysis)
+    sources = sources or prof.get("sources") or default_sources(db, prof, master_meanings, analysis)
     eng = engine or engine_mod.choose(cfg.get("output", {}).get("engine", "auto"))
-    rows = output_rows(judgments, cfg.get("output", {}).get("include_parents", True))
+    ocfg = cfg.get("output", {})
+    rows = output_rows(judgments, ocfg.get("include_parents", True), db.wbs_type, ocfg.get("repeat_categories", True))
     cols = list(prof.get("columns", {}).keys())
     current = plan_mod.template_values(out["file"], prof["sheet"], prof["data_start"], prof.get("data_end") or prof["data_start"],
                                        cols) if prof.get("data_start") else {}

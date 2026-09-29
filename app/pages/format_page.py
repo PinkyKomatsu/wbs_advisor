@@ -114,16 +114,26 @@ class ProfileEditor(QWidget):
         layout.addLayout(top)
         layout.addWidget(self.warning)
         layout.addWidget(split, 1)
+        state.typeChanged.connect(self.load_from_db)
         self.load_from_db()
 
     # ---- 表示 ----
     def load_from_db(self):
         f = self.state.db.active_format(self.kind)
-        if not f:
+        if not f:   # この WBS の種類ではまだ登録されていない
+            self.file, self.profile, self.picked = None, None, None
+            self.file_label.setText(f"未登録（WBSの種類：{self.state.wbs_type}）")
+            self.warning.hide()
+            self.cols.setRowCount(0)
+            self.grid.clear()
+            self.grid.setRowCount(0)
+            self.grid.setColumnCount(0)
+            self.analysis.clear()
+            self.conf.setText("")
             return
         self.file = f["file"]
         self.profile = copy.deepcopy(f["profile"])
-        self.file_label.setText(f"{Path(f['source']).name}（登録日 {f['created'][:10]}）")
+        self.file_label.setText(f"{Path(f['source']).name}（WBSの種類：{self.state.wbs_type}、登録日 {f['created'][:10]}）")
         self._fill(f.get("analysis"))
 
     def _fill(self, analysis=None):

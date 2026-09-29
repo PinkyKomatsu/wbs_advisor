@@ -62,6 +62,7 @@ class AppState(QObject):
     casesChanged = Signal()
     judgmentsChanged = Signal()
     settingsChanged = Signal()
+    typeChanged = Signal()
 
     def __init__(self, db: Database | None = None):
         super().__init__()
@@ -70,6 +71,30 @@ class AppState(QObject):
         self.templates = config_mod.load_text_templates()
         self.judgments: list = []
         self.untranslated: dict = {}
+        last = self.cfg.get("last_wbs_type")
+        self.db.wbs_type = last if last in self.types() else self.types()[0]
+
+    def types(self) -> list[str]:
+        """WBS の種類（設計・構築・テスト など。設定で変更できる）。"""
+        return [t for t in self.cfg.get("wbs_types") or [] if t] or ["設計", "構築", "テスト"]
+
+    @property
+    def wbs_type(self) -> str:
+        return self.db.wbs_type
+
+    def set_type(self, wbs_type: str):
+        """WBS の種類を切り替える。ひな形・様式・過去事例・ルール・上書きはすべて種類ごと。"""
+        if wbs_type == self.db.wbs_type:
+            return
+        self.db.wbs_type = wbs_type
+        self.judgments, self.untranslated = [], {}
+        self.cfg["last_wbs_type"] = wbs_type
+        config_mod.save(self.cfg)
+        log.info("WBS の種類を切り替えました")
+        self.typeChanged.emit()
+        self.formatsChanged.emit()
+        self.casesChanged.emit()
+        self.judgmentsChanged.emit()
 
     def save_config(self):
         config_mod.save(self.cfg)

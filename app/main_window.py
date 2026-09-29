@@ -1,7 +1,7 @@
 """メインウィンドウ：7 つの画面をタブで切り替える。重い処理の進捗はステータスバーの進捗バーに出す。"""
 from __future__ import annotations
 
-from PySide6.QtWidgets import QLabel, QMainWindow, QProgressBar, QTabWidget
+from PySide6.QtWidgets import QComboBox, QLabel, QMainWindow, QProgressBar, QTabWidget, QToolBar
 
 from core import paths
 from excel_io import com_writer
@@ -38,6 +38,26 @@ class MainWindow(QMainWindow):
                             (self.settings_page, "7. 設定")):
             self.tabs.addTab(page, title)
         self.setCentralWidget(self.tabs)
+
+        # WBS の種類（設計・構築・テスト）の切り替え。ひな形・様式・過去事例は種類ごとに持つ
+        bar = QToolBar("WBSの種類")
+        bar.setMovable(False)
+        bar.addWidget(QLabel("  WBSの種類："))
+        self.type_box = QComboBox()
+        self.type_box.setMinimumWidth(120)
+        self.type_box.addItems(self.state.types())
+        self.type_box.setCurrentText(self.state.wbs_type)
+        self.type_box.currentTextChanged.connect(self._type_selected)
+        bar.addWidget(self.type_box)
+        self.type_info = QLabel("")
+        self.type_info.setStyleSheet("color:#555; padding-left:12px")
+        bar.addWidget(self.type_info)
+        self.addToolBar(bar)
+        for sig in (self.state.formatsChanged, self.state.casesChanged, self.state.typeChanged):
+            sig.connect(self._update_type_info)
+        self.state.settingsChanged.connect(self._reload_types)
+        self._update_type_info()
+
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(220)
         self.progress.hide()
@@ -46,6 +66,27 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.progress)
         excel = "Excel あり（COM 方式）" if com_writer.excel_available() else "Excel なし（OOXML 方式）"
         self.statusBar().showMessage(f"保存先：{paths.home()}　／　{excel}　／　オフライン動作（外部通信なし）")
+
+    def _type_selected(self, t: str):
+        if t:
+            self.state.set_type(t)
+
+    def _reload_types(self):
+        self.type_box.blockSignals(True)
+        self.type_box.clear()
+        self.type_box.addItems(self.state.types())
+        if self.state.wbs_type not in self.state.types():
+            self.state.set_type(self.state.types()[0])
+        self.type_box.setCurrentText(self.state.wbs_type)
+        self.type_box.blockSignals(False)
+
+    def _update_type_info(self):
+        c = self.state.db.counts_by_type()
+        parts = []
+        for t in self.state.types():
+            x = c.get(t, {})
+            parts.append(f"{t}：ひな形{'あり' if x.get('master') else 'なし'}・様式{'あり' if x.get('output') else 'なし'}・事例{x.get('cases', 0)}件")
+        self.type_info.setText("　／　".join(parts))
 
     def begin_busy(self, title: str):
         self.busy_label.setText(title + "中…")
