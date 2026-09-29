@@ -1,0 +1,7 @@
+PySide6>=6.6
+openpyxl>=3.1
+pywin32>=306
+rapidfuzz>=3.0
+lxml>=5.0
+pytest>=8.0
+pyinstaller>=6.0

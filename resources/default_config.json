@@ -1,0 +1,46 @@
+{
+  "thresholds": {
+    "required": 0.7,
+    "unneeded": 0.3
+  },
+  "match": {
+    "auto": 90,
+    "review": 70,
+    "wbs_name_min": 60,
+    "phase_bonus": 3
+  },
+  "weighting": {
+    "enabled": true,
+    "coef": 1.0,
+    "update_type": 0.3,
+    "bed_band": 0.2,
+    "vendor": 0.2,
+    "systems": 0.2,
+    "year": 0.05,
+    "tags": 0.05,
+    "year_span": 5
+  },
+  "bed_bands": [100, 200, 400],
+  "attributes": {
+    "update_types": ["リプレース", "バージョンアップ", "制度改正対応"],
+    "systems": ["電子カルテ", "PACS", "検査システム", "薬剤システム", "物流システム", "DWH", "オーダリング", "健診システム"]
+  },
+  "value_map": {
+    "*": {},
+    "owner": {"病院": "病院情報システム部"},
+    "status": {}
+  },
+  "profile": {
+    "header_scan_rows": 30,
+    "confidence_threshold": 0.7,
+    "blank_rows_to_stop": 5
+  },
+  "output": {
+    "include_parents": true,
+    "clear_sample_rows": true,
+    "engine": "auto"
+  },
+  "copy": {
+    "format": "tsv"
+  }
+}

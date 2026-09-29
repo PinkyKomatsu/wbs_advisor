@@ -1,0 +1,36 @@
+{
+  "_説明": "判定理由の定型文。{変数} に値が入ります。設定画面から編集できます。",
+  "stat": {
+    "ja": "過去{total}件中{adopted}件（{rate}%）で採用。",
+    "en": "Adopted in {adopted} of {total} past projects ({rate}%)."
+  },
+  "stat_none": {
+    "ja": "過去{total}件のいずれでも採用なし。",
+    "en": "Not adopted in any of {total} past projects."
+  },
+  "weighted": {
+    "ja": "属性の近い事例を重視した採用率は{wrate}%。",
+    "en": "Weighted by project similarity: {wrate}%."
+  },
+  "no_cases": {
+    "ja": "過去事例がないため判定できません。",
+    "en": "No past projects are available for this assessment."
+  },
+  "rule": {
+    "ja": "条件『{rule}』に一致。",
+    "en": "Matches condition: {rule}."
+  },
+  "manual": {
+    "ja": "手動で「{decision}」に変更。",
+    "en": "Manually set to \"{decision}\"."
+  },
+  "extra": {
+    "ja": "ひな形外の追加項目。",
+    "en": "Item not in the master template."
+  },
+  "decisions": {
+    "必要": "Required",
+    "要検討": "Review",
+    "不要": "Not required"
+  }
+}
